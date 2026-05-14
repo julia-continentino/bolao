@@ -111,11 +111,11 @@ const GRUPOS = {
 };
 
 const ROUNDS = [
-  {key:"r16",label:"Oitavas de Final",pts:4, slots:16,deadline:"2026-06-27T23:59:59-03:00"},
-  {key:"r8", label:"Quartas de Final",pts:8, slots:8, deadline:"2026-07-03T23:59:59-03:00"},
-  {key:"r4", label:"Semifinais",      pts:16,slots:4, deadline:"2026-07-08T23:59:59-03:00"},
-  {key:"r2", label:"Final",           pts:32,slots:2, deadline:"2026-07-13T23:59:59-03:00"},
-  {key:"r1", label:"Campeão",         pts:64,slots:1, deadline:"2026-07-17T23:59:59-03:00"}
+  {key:"r16",label:"16 times classificados para as oitavas",pts:2, slots:16,deadline:"2026-06-27T23:59:59-03:00"},
+  {key:"r8", label:"8 times classificados para as quartas", pts:3, slots:8, deadline:"2026-07-03T23:59:59-03:00"},
+  {key:"r4", label:"4 times classificados para as semis",   pts:4, slots:4, deadline:"2026-07-08T23:59:59-03:00"},
+  {key:"r2", label:"2 times classificados para a final",    pts:6, slots:2, deadline:"2026-07-13T23:59:59-03:00"},
+  {key:"r1", label:"Campeão",                                pts:10,slots:1, deadline:"2026-07-17T23:59:59-03:00"}
 ];
 
 const GROUP_DEADLINE = "2026-06-10T23:59:59-03:00";
@@ -126,7 +126,12 @@ const ALL_TEAMS = Object.values(GRUPOS)
   .sort();
 
 const LOCAL_KEY = "bolao2026_local";
-const ADMIN_PWD = "copa2026";
+const ADMIN_PWD_HASH = "b92e9172da82616564bd6b24228bc2241c78a4e18ef967a9b4b3691bc00040ce";
+
+async function sha256(text){
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+}
 
 const localPrefs = loadLocalPrefs();
 
@@ -245,6 +250,24 @@ async function removeParticipant(id){
   } catch(e){ console.error(e); }
 }
 
+function scoreGroup(p, r){
+  if (!p || !r) return { points: 0, kind: "none" };
+  const pf = p.first, ps = p.second;
+  const rf = r.first, rs = r.second;
+  if (!pf && !ps) return { points: 0, kind: "none" };
+  if (!rf && !rs) return { points: 0, kind: "none" };
+
+  if (pf && ps && rf && rs){
+    if (pf === rf && ps === rs) return { points: 4, kind: "exact" };
+    if (pf === rs && ps === rf) return { points: 2, kind: "inverted" };
+  }
+  const pSet = [pf, ps].filter(Boolean);
+  const rSet = [rf, rs].filter(Boolean);
+  const matches = pSet.filter(x => rSet.includes(x)).length;
+  if (matches >= 1) return { points: 1, kind: "partial" };
+  return { points: 0, kind: "none" };
+}
+
 function calcScore(palpites, results){
   let score = 0;
   const pg = palpites?.groups || {};
@@ -253,11 +276,7 @@ function calcScore(palpites, results){
   const rr = results?.rounds  || {};
 
   Object.keys(GRUPOS).forEach(g => {
-    const p = pg[g] || {}, r = rg[g] || {};
-    let a = 0;
-    if (p.first  && r.first  && p.first  === r.first)  a++;
-    if (p.second && r.second && p.second === r.second) a++;
-    score += a === 2 ? 4 : a;
+    score += scoreGroup(pg[g], rg[g]).points;
   });
 
   ROUNDS.forEach(round => {
@@ -351,9 +370,14 @@ function buildHome(){
   </div>
   <div class="score-bar">
     <div style="font-weight:600;font-size:14px;margin-bottom:12px">Sistema de pontuação</div>
-    ${[["1º ou 2º do grupo","1 pt cada"],["Acertar 1º e 2º","+2 pts bônus"],
-       ["Oitavas de final","4 pts"],["Quartas de final","8 pts"],
-       ["Semifinais","16 pts"],["Vice-campeão","32 pts"],["Campeão","64 pts"]]
+    ${[["Acertar os 2 do grupo em ordem","4 pts"],
+       ["Acertar os 2 em ordem invertida","2 pts"],
+       ["Acertar apenas 1 do grupo","1 pt"],
+       ["Pré-oitavas (cada time → oitavas)","2 pts"],
+       ["Oitavas (cada time → quartas)","3 pts"],
+       ["Quartas (cada time → semis)","4 pts"],
+       ["Semifinais (cada finalista)","6 pts"],
+       ["Acertar o campeão","10 pts"]]
       .map(r => `<div class="score-row"><span class="score-label">${r[0]}</span><span class="score-pts">${r[1]}</span></div>`)
       .join("")}
   </div>`;
@@ -395,7 +419,6 @@ function buildAdmin(){
       <div style="font-size:14px;color:#666;margin-bottom:12px">Senha de administrador:</div>
       <input id="admin-pwd" type="password" placeholder="Senha..." style="margin-bottom:12px"/>
       <button class="btn-green" id="btn-admin-login" style="width:100%;padding:10px">Entrar</button>
-      <div style="font-size:11px;color:#aaa;margin-top:8px;text-align:center">Senha padrão: copa2026</div>
     </div>`;
   }
 
@@ -477,7 +500,10 @@ function buildPalpitar(){
       const rg  = state.data.results.groups?.[g] || {};
       const a1  = !!(rg.first  && pal.first  === rg.first);
       const a2  = !!(rg.second && pal.second === rg.second);
-      const badge = (a1||a2) ? `<span style="font-size:11px;color:#FEDD00">${a1&&a2?"✓✓ +4":"✓ +1"}</span>` : "";
+      const sr  = scoreGroup(pal, rg);
+      const badge = sr.points > 0
+        ? `<span style="font-size:11px;color:#FEDD00">${sr.kind==="exact"?"✓✓ +4":sr.kind==="inverted"?"⇄ +2":"✓ +1"}</span>`
+        : "";
       const opts1 = teams.map(t => `<option value="${esc(t)}"${pal.first===t?" selected":""}>${esc(t)}</option>`).join("");
       const opts2 = teams.map(t => `<option value="${esc(t)}"${pal.second===t?" selected":""}>${esc(t)}</option>`).join("");
       const dis = groupsLocked ? "disabled" : "";
@@ -585,9 +611,10 @@ function attachEvents(){
   });
 
   const btnLogin = document.getElementById("btn-admin-login");
-  if (btnLogin) btnLogin.addEventListener("click", () => {
+  if (btnLogin) btnLogin.addEventListener("click", async () => {
     const pwd = document.getElementById("admin-pwd").value;
-    if (pwd === ADMIN_PWD){ state.adminUnlocked = true; saveLocalPrefs(); render(); }
+    const hash = await sha256(pwd);
+    if (hash === ADMIN_PWD_HASH){ state.adminUnlocked = true; saveLocalPrefs(); render(); }
     else alert("Senha incorreta");
   });
 
