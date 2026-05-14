@@ -63,6 +63,12 @@ select.acerto-border{border-color:#22c55e}
 .sync-status.connected{color:#16a34a}
 .sync-status.connecting{color:#f59e0b}
 .sync-status.error{color:#dc2626}
+.locked-tag{display:inline-block;background:#dc2626;color:#fff;font-size:10px;padding:2px 6px;border-radius:4px;margin-left:6px;font-weight:600}
+.deadline-tag{display:inline-block;background:#f59e0b;color:#fff;font-size:10px;padding:2px 6px;border-radius:4px;margin-left:6px;font-weight:600}
+select:disabled{opacity:0.55;background:#f3f3f3;cursor:not-allowed}
+.deadline-banner{padding:10px 14px;border-radius:8px;margin-bottom:14px;font-size:13px;text-align:center;font-weight:600}
+.deadline-banner.open{background:#fef3c7;color:#92400e;border:1px solid #fde68a}
+.deadline-banner.closed{background:#fee2e2;color:#991b1b;border:1px solid #fecaca}
 .hidden{display:none}
 </style>
 </head>
@@ -105,12 +111,14 @@ const GRUPOS = {
 };
 
 const ROUNDS = [
-  {key:"r16",label:"Oitavas de Final",pts:4,slots:16},
-  {key:"r8", label:"Quartas de Final",pts:8,slots:8},
-  {key:"r4", label:"Semifinais",      pts:16,slots:4},
-  {key:"r2", label:"Final",           pts:32,slots:2},
-  {key:"r1", label:"Campeão",         pts:64,slots:1}
+  {key:"r16",label:"Oitavas de Final",pts:4, slots:16,deadline:"2026-06-27T23:59:59-03:00"},
+  {key:"r8", label:"Quartas de Final",pts:8, slots:8, deadline:"2026-07-03T23:59:59-03:00"},
+  {key:"r4", label:"Semifinais",      pts:16,slots:4, deadline:"2026-07-08T23:59:59-03:00"},
+  {key:"r2", label:"Final",           pts:32,slots:2, deadline:"2026-07-13T23:59:59-03:00"},
+  {key:"r1", label:"Campeão",         pts:64,slots:1, deadline:"2026-07-17T23:59:59-03:00"}
 ];
+
+const GROUP_DEADLINE = "2026-06-10T23:59:59-03:00";
 
 const ALL_TEAMS = Object.values(GRUPOS)
   .reduce((a,b)=>a.concat(b),[])
@@ -153,6 +161,29 @@ function setSyncStatus(kind, text){
   else el.style.opacity = "1";
 }
 
+function isLocked(deadline){
+  return new Date() > new Date(deadline);
+}
+
+function fmtDate(deadline){
+  const d = new Date(deadline);
+  return d.toLocaleDateString("pt-BR", {day:"2-digit", month:"2-digit"});
+}
+
+function availableForRound(roundKey, currentPick){
+  let teams;
+  if (roundKey === "r4"){
+    const qf = state.data.results.rounds?.["r8"] || [];
+    teams = qf.length === 0 ? ALL_TEAMS : qf.slice().sort((a,b)=>a.localeCompare(b));
+  } else {
+    teams = ALL_TEAMS;
+  }
+  if (currentPick && !teams.includes(currentPick)){
+    teams = [currentPick, ...teams];
+  }
+  return teams;
+}
+
 onSnapshot(collection(db,"participants"),(snap)=>{
   const list = [];
   snap.forEach(d => list.push({ id: d.id, ...d.data() }));
@@ -187,6 +218,7 @@ async function saveParticipant(p){
     setSyncStatus("connecting","💾 Salvando...");
     await setDoc(doc(db,"participants", String(p.id)), {
       name: p.name,
+      pin: p.pin || "",
       palpites: p.palpites || { groups:{}, rounds:{} }
     });
     setSyncStatus("connected","✅ Salvo");
@@ -279,25 +311,42 @@ function buildPage(){
 }
 
 function buildHome(){
+  const activeP = getParticipant();
+  let activeCard = "";
+  if (activeP){
+    activeCard = `<div class="card-green" style="text-align:left">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <div style="flex:1;min-width:140px">
+          <div style="font-size:12px;color:rgba(255,255,255,0.85)">Continuar como</div>
+          <div style="font-weight:700;color:#FEDD00;font-size:18px">${esc(activeP.name)}</div>
+        </div>
+        <button class="btn-green" data-continue="1" style="background:#FEDD00;color:#006233">Meus palpites →</button>
+        <button id="btn-logout-home" style="background:transparent;border:1px solid rgba(255,255,255,0.4);color:#fff;border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer">Sair</button>
+      </div>
+    </div>`;
+  } else {
+    activeCard = `<div class="card-green"><h1>🏆 Bolão Copa do Mundo 2026</h1><p>Faça seus palpites e dispute com amigos!</p></div>`;
+  }
+
   let participantsHTML = "";
   if (state.data.participants.length > 0){
     const btns = state.data.participants
       .slice()
       .sort((a,b)=> a.name.localeCompare(b.name))
-      .map(p => `<button class="btn-blue" data-select="${esc(p.id)}">${esc(p.name)}</button>`)
+      .map(p => `<button class="btn-blue" data-select="${esc(p.id)}">${esc(p.name)}${p.pin?" 🔒":""}</button>`)
       .join("");
-    participantsHTML = `<div style="margin-bottom:12px"><div style="font-size:13px;color:#666;margin-bottom:8px">Já cadastrado? Selecione:</div><div style="display:flex;flex-wrap:wrap;gap:8px">${btns}</div></div>`;
+    participantsHTML = `<div style="margin-bottom:12px"><div style="font-size:13px;color:#666;margin-bottom:8px">Já cadastrado? Selecione (vai pedir seu PIN):</div><div style="display:flex;flex-wrap:wrap;gap:8px">${btns}</div></div>`;
   }
-  return `<div class="card-green"><h1>🏆 Bolão Copa do Mundo 2026</h1><p>Faça seus palpites e dispute com amigos!</p></div>
+  return activeCard + `
   <div class="card">
     <div style="font-weight:600;font-size:15px;margin-bottom:14px">Participar do bolão</div>
     ${participantsHTML}
     <div style="border-top:1px solid #eee;padding-top:12px">
       <div style="font-size:13px;color:#666;margin-bottom:8px">Novo participante:</div>
-      <div class="row">
-        <input id="inp-name" type="text" placeholder="Seu nome..." style="flex:1"/>
-        <button class="btn-green" id="btn-add" style="white-space:nowrap">Entrar</button>
-      </div>
+      <input id="inp-name" type="text" placeholder="Seu nome..." style="margin-bottom:8px"/>
+      <input id="inp-pin" type="password" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="PIN de 4 dígitos (anote!)" style="margin-bottom:8px"/>
+      <button class="btn-green" id="btn-add" style="width:100%">Entrar</button>
+      <div style="font-size:11px;color:#999;margin-top:6px">⚠️ O PIN é necessário pra você editar seus palpites depois. Anote.</div>
     </div>
   </div>
   <div class="score-bar">
@@ -377,7 +426,8 @@ function buildAdmin(){
     content = ROUNDS.map(round => {
       const rr = state.data.results.rounds?.[round.key] || [];
       const selects = Array.from({length:round.slots}).map((_,i) => {
-        const opts = ALL_TEAMS.map(t => `<option value="${esc(t)}"${rr[i]===t?" selected":""}>${esc(t)}</option>`).join("");
+        const available = availableForRound(round.key, rr[i]);
+        const opts = available.map(t => `<option value="${esc(t)}"${rr[i]===t?" selected":""}>${esc(t)}</option>`).join("");
         return `<select data-result-round="${round.key}" data-idx="${i}"><option value="">-- time --</option>${opts}</select>`;
       }).join("");
       return `<div class="fase-card">
@@ -407,6 +457,7 @@ function buildPalpitar(){
   const userBar = `<div class="user-bar">
     <button class="btn-outline" id="btn-voltar">← Voltar</button>
     <div class="pts-badge">${esc(p.name)} — ${score} pts</div>
+    <button class="btn-outline" id="btn-logout" style="margin-left:auto;color:#dc2626;border-color:#dc2626">Sair</button>
   </div>`;
 
   const tabsHTML = `<div class="tabs">
@@ -416,6 +467,10 @@ function buildPalpitar(){
 
   let content = "";
   if (state.tab === "grupos"){
+    const groupsLocked = isLocked(GROUP_DEADLINE);
+    const deadlineBanner = `<div class="deadline-banner ${groupsLocked?'closed':'open'}">
+      ${groupsLocked ? '🔒 Palpites de grupos encerrados em' : '⏰ Palpites de grupos até'} ${fmtDate(GROUP_DEADLINE)}
+    </div>`;
     const pg = p.palpites?.groups || {};
     const cards = Object.entries(GRUPOS).map(([g, teams]) => {
       const pal = pg[g] || {};
@@ -425,34 +480,41 @@ function buildPalpitar(){
       const badge = (a1||a2) ? `<span style="font-size:11px;color:#FEDD00">${a1&&a2?"✓✓ +4":"✓ +1"}</span>` : "";
       const opts1 = teams.map(t => `<option value="${esc(t)}"${pal.first===t?" selected":""}>${esc(t)}</option>`).join("");
       const opts2 = teams.map(t => `<option value="${esc(t)}"${pal.second===t?" selected":""}>${esc(t)}</option>`).join("");
+      const dis = groupsLocked ? "disabled" : "";
       return `<div class="palpite-card">
         <div class="palpite-header"><span>Grupo ${g}</span>${badge}</div>
         <div class="palpite-body">
           <div class="palpite-label">1º lugar ${a1?"✅":""}</div>
-          <select data-pal-group="${g}" data-pos="first" style="margin-bottom:8px"><option value="">-- palpite --</option>${opts1}</select>
+          <select data-pal-group="${g}" data-pos="first" ${dis} style="margin-bottom:8px"><option value="">-- palpite --</option>${opts1}</select>
           <div class="palpite-label">2º lugar ${a2?"✅":""}</div>
-          <select data-pal-group="${g}" data-pos="second"><option value="">-- palpite --</option>${opts2}</select>
+          <select data-pal-group="${g}" data-pos="second" ${dis}><option value="">-- palpite --</option>${opts2}</select>
         </div>
       </div>`;
     }).join("");
-    content = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(195px,1fr));gap:12px">${cards}</div>`;
+    content = deadlineBanner + `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(195px,1fr));gap:12px">${cards}</div>`;
   } else {
     const pr2 = p.palpites?.rounds || {};
     content = ROUNDS.map(round => {
       const pp  = pr2[round.key] || [];
       const rr2 = state.data.results.rounds?.[round.key] || [];
+      const locked = isLocked(round.deadline);
+      const lockTag = locked
+        ? `<span class="locked-tag">🔒 Encerrado ${fmtDate(round.deadline)}</span>`
+        : `<span class="deadline-tag">⏰ Até ${fmtDate(round.deadline)}</span>`;
       const selects = Array.from({length:round.slots}).map((_,i) => {
         const acerto = !!(pp[i] && rr2.indexOf(pp[i]) !== -1);
-        const opts = ALL_TEAMS.map(t => `<option value="${esc(t)}"${pp[i]===t?" selected":""}>${esc(t)}</option>`).join("");
+        const available = availableForRound(round.key, pp[i]);
+        const opts = available.map(t => `<option value="${esc(t)}"${pp[i]===t?" selected":""}>${esc(t)}</option>`).join("");
+        const dis = locked ? "disabled" : "";
         return `<div style="display:flex;flex-direction:column;gap:4px">
-          <select data-pal-round="${round.key}" data-idx="${i}" ${acerto?'class="acerto-border"':''}>
+          <select data-pal-round="${round.key}" data-idx="${i}" ${dis} ${acerto?'class="acerto-border"':''}>
             <option value="">-- time --</option>${opts}
           </select>
           ${acerto?`<span class="acerto">✅ +${round.pts}</span>`:""}
         </div>`;
       }).join("");
       return `<div class="fase-card">
-        <div class="fase-header"><span>${round.label}</span><small>${round.pts} pts por acerto</small></div>
+        <div class="fase-header"><span>${round.label}</span><small>${round.pts} pts ${lockTag}</small></div>
         <div class="fase-body">${selects}</div>
       </div>`;
     }).join("");
@@ -471,12 +533,43 @@ function attachEvents(){
 
   document.querySelectorAll("[data-select]").forEach(btn => {
     btn.addEventListener("click", function(){
-      state.activeParticipant = this.getAttribute("data-select");
+      const id = this.getAttribute("data-select");
+      const p = state.data.participants.find(x => x.id === id);
+      if (!p) return;
+      if (p.pin){
+        const pin = window.prompt(`Digite o PIN de 4 dígitos de ${p.name}:`);
+        if (pin === null) return;
+        if (pin !== p.pin){ alert("PIN incorreto."); return; }
+      }
+      state.activeParticipant = id;
       saveLocalPrefs();
       state.view = "palpitar";
       state.tab = "grupos";
       render();
     });
+  });
+
+  document.querySelectorAll("[data-continue]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      state.view = "palpitar";
+      state.tab = "grupos";
+      render();
+    });
+  });
+
+  const btnLogoutHome = document.getElementById("btn-logout-home");
+  if (btnLogoutHome) btnLogoutHome.addEventListener("click", () => {
+    state.activeParticipant = null;
+    saveLocalPrefs();
+    render();
+  });
+
+  const btnLogout = document.getElementById("btn-logout");
+  if (btnLogout) btnLogout.addEventListener("click", () => {
+    state.activeParticipant = null;
+    saveLocalPrefs();
+    state.view = "home";
+    render();
   });
 
   const btnAdd = document.getElementById("btn-add");
@@ -558,18 +651,17 @@ function attachEvents(){
 
 async function addParticipant(){
   const inp = document.getElementById("inp-name");
-  if (!inp || !inp.value.trim()) return;
+  const pinInp = document.getElementById("inp-pin");
+  if (!inp || !inp.value.trim()){ alert("Digite seu nome."); return; }
+  if (!pinInp || !/^\d{4}$/.test(pinInp.value)){ alert("Digite um PIN de 4 dígitos numéricos."); return; }
   const name = inp.value.trim();
+  const pin = pinInp.value;
   const existing = state.data.participants.find(p => p.name.toLowerCase() === name.toLowerCase());
   if (existing){
-    state.activeParticipant = existing.id;
-    saveLocalPrefs();
-    state.view = "palpitar";
-    state.tab = "grupos";
-    render();
+    alert(`O nome "${name}" já está cadastrado. Selecione na lista acima e use o PIN.`);
     return;
   }
-  const p = { id: String(Date.now()), name, palpites: { groups:{}, rounds:{} } };
+  const p = { id: String(Date.now()), name, pin, palpites: { groups:{}, rounds:{} } };
   await saveParticipant(p);
   state.activeParticipant = p.id;
   saveLocalPrefs();
