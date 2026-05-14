@@ -1,5 +1,4 @@
 <!DOCTYPE html>
-
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8"/>
@@ -60,15 +59,37 @@ select.acerto-border{border-color:#22c55e}
 .tabs{display:flex;gap:10px;margin-bottom:16px}
 .user-bar{display:flex;align-items:center;gap:10px;margin-bottom:16px}
 .admin-box{background:#fff;border:1px solid #ddd;border-radius:12px;padding:24px;max-width:360px;margin:0 auto}
+.sync-status{position:fixed;bottom:12px;right:12px;background:#fff;border:1px solid #ddd;border-radius:20px;padding:4px 12px;font-size:11px;color:#666;box-shadow:0 2px 8px rgba(0,0,0,0.1);z-index:100}
+.sync-status.connected{color:#16a34a}
+.sync-status.connecting{color:#f59e0b}
+.sync-status.error{color:#dc2626}
 .hidden{display:none}
 </style>
 </head>
 <body>
 
 <div id="app"></div>
+<div id="sync-status" class="sync-status connecting">⏳ Conectando...</div>
 
-<script>
-var GRUPOS = {
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import {
+  getFirestore, doc, collection, setDoc, deleteDoc, onSnapshot
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBKfutY8bMROBKQc1Hz_0ec_Bt7ZokRRp8",
+  authDomain: "bolao-copa-2026-98887.firebaseapp.com",
+  projectId: "bolao-copa-2026-98887",
+  storageBucket: "bolao-copa-2026-98887.firebasestorage.app",
+  messagingSenderId: "1064307690814",
+  appId: "1:1064307690814:web:1a3ba7570dc2a915f7b06f"
+};
+
+const app = initializeApp(firebaseConfig);
+const db  = getFirestore(app);
+
+const GRUPOS = {
   A:["EUA","Canadá","México","Nova Zelândia"],
   B:["Argentina","Equador","Peru","Chile"],
   C:["Brasil","Colômbia","Uruguai","Bolívia"],
@@ -83,7 +104,7 @@ var GRUPOS = {
   L:["Camarões","Costa do Marfim","Nigéria","África do Sul"]
 };
 
-var ROUNDS = [
+const ROUNDS = [
   {key:"r16",label:"Oitavas de Final",pts:4,slots:16},
   {key:"r8", label:"Quartas de Final",pts:8,slots:8},
   {key:"r4", label:"Semifinais",      pts:16,slots:4},
@@ -91,378 +112,467 @@ var ROUNDS = [
   {key:"r1", label:"Campeão",         pts:64,slots:1}
 ];
 
-var ALL_TEAMS = Object.values(GRUPOS)
-  .reduce(function(a,b){return a.concat(b);},[])
-  .filter(function(v,i,arr){return arr.indexOf(v)===i;})
+const ALL_TEAMS = Object.values(GRUPOS)
+  .reduce((a,b)=>a.concat(b),[])
+  .filter((v,i,arr)=>arr.indexOf(v)===i)
   .sort();
 
-var STORAGE_KEY = "bolao2026_html";
-var ADMIN_PWD   = "copa2026";
+const LOCAL_KEY = "bolao2026_local";
+const ADMIN_PWD = "copa2026";
 
-var state = {
+const localPrefs = loadLocalPrefs();
+
+const state = {
   view: "home",
   tab: "grupos",
-  activeParticipant: null,
-  adminUnlocked: false,
-  data: loadData()
+  activeParticipant: localPrefs.activeParticipant || null,
+  adminUnlocked: !!localPrefs.adminUnlocked,
+  loaded: { participants:false, results:false },
+  data: { participants:[], results:{ groups:{}, rounds:{} } }
 };
 
-function loadData() {
+function loadLocalPrefs(){
+  try { return JSON.parse(localStorage.getItem(LOCAL_KEY)) || {}; }
+  catch(e){ return {}; }
+}
+function saveLocalPrefs(){
   try {
-    var d = localStorage.getItem(STORAGE_KEY);
-    return d ? JSON.parse(d) : {participants:[],results:{groups:{},rounds:{}}};
-  } catch(e) {
-    return {participants:[],results:{groups:{},rounds:{}}};
+    localStorage.setItem(LOCAL_KEY, JSON.stringify({
+      activeParticipant: state.activeParticipant,
+      adminUnlocked: state.adminUnlocked
+    }));
+  } catch(e){}
+}
+
+function setSyncStatus(kind, text){
+  const el = document.getElementById("sync-status");
+  if (!el) return;
+  el.className = "sync-status " + kind;
+  el.textContent = text;
+  if (kind === "connected") setTimeout(()=>{ el.style.opacity = "0.4"; }, 2000);
+  else el.style.opacity = "1";
+}
+
+onSnapshot(collection(db,"participants"),(snap)=>{
+  const list = [];
+  snap.forEach(d => list.push({ id: d.id, ...d.data() }));
+  state.data.participants = list;
+  state.loaded.participants = true;
+  checkLoadedAndRender();
+}, (err)=>{
+  console.error(err);
+  setSyncStatus("error","⚠️ Erro de conexão");
+});
+
+onSnapshot(doc(db,"meta","results"),(snap)=>{
+  state.data.results = snap.exists()
+    ? { groups: snap.data().groups || {}, rounds: snap.data().rounds || {} }
+    : { groups:{}, rounds:{} };
+  state.loaded.results = true;
+  checkLoadedAndRender();
+}, (err)=>{
+  console.error(err);
+  setSyncStatus("error","⚠️ Erro de conexão");
+});
+
+function checkLoadedAndRender(){
+  if (state.loaded.participants && state.loaded.results){
+    setSyncStatus("connected","✅ Sincronizado");
+  }
+  render();
+}
+
+async function saveParticipant(p){
+  try {
+    setSyncStatus("connecting","💾 Salvando...");
+    await setDoc(doc(db,"participants", String(p.id)), {
+      name: p.name,
+      palpites: p.palpites || { groups:{}, rounds:{} }
+    });
+    setSyncStatus("connected","✅ Salvo");
+  } catch(e){
+    console.error(e);
+    setSyncStatus("error","⚠️ Falha ao salvar");
   }
 }
 
-function saveData() {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state.data)); } catch(e) {}
+async function saveResults(){
+  try {
+    setSyncStatus("connecting","💾 Salvando...");
+    await setDoc(doc(db,"meta","results"), state.data.results);
+    setSyncStatus("connected","✅ Salvo");
+  } catch(e){
+    console.error(e);
+    setSyncStatus("error","⚠️ Falha ao salvar");
+  }
 }
 
-function calcScore(palpites, results) {
-  var score = 0;
-  var pg = (palpites && palpites.groups) ? palpites.groups : {};
-  var rg = (results && results.groups)   ? results.groups  : {};
-  var pr = (palpites && palpites.rounds) ? palpites.rounds : {};
-  var rr = (results && results.rounds)   ? results.rounds  : {};
+async function removeParticipant(id){
+  try {
+    await deleteDoc(doc(db,"participants", String(id)));
+  } catch(e){ console.error(e); }
+}
 
-  Object.keys(GRUPOS).forEach(function(g) {
-    var p = pg[g] || {}, r = rg[g] || {}, a = 0;
+function calcScore(palpites, results){
+  let score = 0;
+  const pg = palpites?.groups || {};
+  const rg = results?.groups  || {};
+  const pr = palpites?.rounds || {};
+  const rr = results?.rounds  || {};
+
+  Object.keys(GRUPOS).forEach(g => {
+    const p = pg[g] || {}, r = rg[g] || {};
+    let a = 0;
     if (p.first  && r.first  && p.first  === r.first)  a++;
     if (p.second && r.second && p.second === r.second) a++;
     score += a === 2 ? 4 : a;
   });
 
-  ROUNDS.forEach(function(round) {
-    var pR = pr[round.key] || [], rR = rr[round.key] || [];
-    pR.forEach(function(t){ if(rR.indexOf(t) !== -1) score += round.pts; });
+  ROUNDS.forEach(round => {
+    const pR = pr[round.key] || [], rR = rr[round.key] || [];
+    pR.forEach(t => { if (rR.indexOf(t) !== -1) score += round.pts; });
   });
   return score;
 }
 
-function getParticipant() {
+function getParticipant(){
   if (!state.activeParticipant) return null;
-  for (var i=0; i<state.data.participants.length; i++) {
-    if (state.data.participants[i].id === state.activeParticipant) return state.data.participants[i];
-  }
-  return null;
+  return state.data.participants.find(p => p.id === state.activeParticipant) || null;
 }
 
-function getRanking() {
-  return state.data.participants.map(function(p) {
-    return {id:p.id, name:p.name, score:calcScore(p.palpites, state.data.results)};
-  }).sort(function(a,b){return b.score - a.score;});
+function getRanking(){
+  return state.data.participants
+    .map(p => ({ id:p.id, name:p.name, score:calcScore(p.palpites, state.data.results) }))
+    .sort((a,b)=> b.score - a.score);
 }
 
-/* ── RENDER ── */
-function render() {
+function esc(str){
+  return String(str).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+function render(){
   document.getElementById("app").innerHTML = buildPage();
   attachEvents();
 }
 
-function buildHeader() {
-  var views = [["home","Início"],["grupos","Grupos"],["ranking","Ranking"],["admin","Admin"]];
-  var nav = views.map(function(v) {
-    return '<button class="'+(state.view===v[0]?"active":"")+'" data-nav="'+v[0]+'">'+v[1]+'</button>';
-  }).join("");
-  return '<div class="header">'+
-    '<div class="logo">⚽</div>'+
-    '<div><div class="header-title">Bolão Copa 2026</div><div class="header-sub">EUA · Canadá · México</div></div>'+
-    '<div class="nav">'+nav+'</div>'+
-  '</div>';
+function buildHeader(){
+  const views = [["home","Início"],["grupos","Grupos"],["ranking","Ranking"],["admin","Admin"]];
+  const nav = views.map(v =>
+    `<button class="${state.view===v[0]?"active":""}" data-nav="${v[0]}">${v[1]}</button>`
+  ).join("");
+  return `<div class="header">
+    <div class="logo">⚽</div>
+    <div><div class="header-title">Bolão Copa 2026</div><div class="header-sub">EUA · Canadá · México</div></div>
+    <div class="nav">${nav}</div>
+  </div>`;
 }
 
-function buildPage() {
-  var header = buildHeader();
-  var body = "";
+function buildPage(){
+  const header = buildHeader();
+  let body = "";
   if (state.view === "home")     body = buildHome();
   if (state.view === "grupos")   body = buildGrupos();
   if (state.view === "ranking")  body = buildRanking();
   if (state.view === "admin")    body = buildAdmin();
   if (state.view === "palpitar") body = buildPalpitar();
-  return header + '<div class="container">' + body + '</div>';
+  return header + `<div class="container">${body}</div>`;
 }
 
-function buildHome() {
-  var participantsHTML = "";
-  if (state.data.participants.length > 0) {
-    var btns = state.data.participants.map(function(p) {
-      return '<button class="btn-blue" data-select="'+p.id+'">'+esc(p.name)+'</button>';
-    }).join("");
-    participantsHTML = '<div style="margin-bottom:12px"><div style="font-size:13px;color:#666;margin-bottom:8px">Já cadastrado? Selecione:</div><div style="display:flex;flex-wrap:wrap;gap:8px">'+btns+'</div></div>';
+function buildHome(){
+  let participantsHTML = "";
+  if (state.data.participants.length > 0){
+    const btns = state.data.participants
+      .slice()
+      .sort((a,b)=> a.name.localeCompare(b.name))
+      .map(p => `<button class="btn-blue" data-select="${esc(p.id)}">${esc(p.name)}</button>`)
+      .join("");
+    participantsHTML = `<div style="margin-bottom:12px"><div style="font-size:13px;color:#666;margin-bottom:8px">Já cadastrado? Selecione:</div><div style="display:flex;flex-wrap:wrap;gap:8px">${btns}</div></div>`;
   }
-  return '<div class="card-green"><h1>🏆 Bolão Copa do Mundo 2026</h1><p>Faça seus palpites e dispute com amigos!</p></div>'+
-  '<div class="card">'+
-    '<div style="font-weight:600;font-size:15px;margin-bottom:14px">Participar do bolão</div>'+
-    participantsHTML+
-    '<div style="border-top:1px solid #eee;padding-top:12px">'+
-      '<div style="font-size:13px;color:#666;margin-bottom:8px">Novo participante:</div>'+
-      '<div class="row">'+
-        '<input id="inp-name" type="text" placeholder="Seu nome..." style="flex:1"/>'+
-        '<button class="btn-green" id="btn-add" style="white-space:nowrap">Entrar</button>'+
-      '</div>'+
-    '</div>'+
-  '</div>'+
-  '<div class="score-bar">'+
-    '<div style="font-weight:600;font-size:14px;margin-bottom:12px">Sistema de pontuação</div>'+
-    [["1º ou 2º do grupo","1 pt cada"],["Acertar 1º e 2º","+2 pts bônus"],
-     ["Oitavas de final","4 pts"],["Quartas de final","8 pts"],
-     ["Semifinais","16 pts"],["Vice-campeão","32 pts"],["Campeão","64 pts"]
-    ].map(function(r){
-      return '<div class="score-row"><span class="score-label">'+r[0]+'</span><span class="score-pts">'+r[1]+'</span></div>';
-    }).join("")+
-  '</div>';
+  return `<div class="card-green"><h1>🏆 Bolão Copa do Mundo 2026</h1><p>Faça seus palpites e dispute com amigos!</p></div>
+  <div class="card">
+    <div style="font-weight:600;font-size:15px;margin-bottom:14px">Participar do bolão</div>
+    ${participantsHTML}
+    <div style="border-top:1px solid #eee;padding-top:12px">
+      <div style="font-size:13px;color:#666;margin-bottom:8px">Novo participante:</div>
+      <div class="row">
+        <input id="inp-name" type="text" placeholder="Seu nome..." style="flex:1"/>
+        <button class="btn-green" id="btn-add" style="white-space:nowrap">Entrar</button>
+      </div>
+    </div>
+  </div>
+  <div class="score-bar">
+    <div style="font-weight:600;font-size:14px;margin-bottom:12px">Sistema de pontuação</div>
+    ${[["1º ou 2º do grupo","1 pt cada"],["Acertar 1º e 2º","+2 pts bônus"],
+       ["Oitavas de final","4 pts"],["Quartas de final","8 pts"],
+       ["Semifinais","16 pts"],["Vice-campeão","32 pts"],["Campeão","64 pts"]]
+      .map(r => `<div class="score-row"><span class="score-label">${r[0]}</span><span class="score-pts">${r[1]}</span></div>`)
+      .join("")}
+  </div>`;
 }
 
-function buildGrupos() {
-  var cards = Object.entries(GRUPOS).map(function(entry) {
-    var g = entry[0], teams = entry[1];
-    var isBrasil = g === "C";
-    var teams_html = teams.map(function(t,i){
-      return '<div class="grupo-team"><span class="grupo-num">'+(i+1)+'.</span>'+esc(t)+'</div>';
-    }).join("");
-    return '<div class="grupo-card'+(isBrasil?" brasil":"")+'">'+
-      '<div class="grupo-header '+(isBrasil?"verde":"azul")+'"><span>Grupo '+g+(isBrasil?" 🇧🇷":""+'')+'</span></div>'+
-      teams_html+
-    '</div>';
+function buildGrupos(){
+  const cards = Object.entries(GRUPOS).map(([g, teams]) => {
+    const isBrasil = g === "C";
+    const teams_html = teams.map((t,i) =>
+      `<div class="grupo-team"><span class="grupo-num">${i+1}.</span>${esc(t)}</div>`
+    ).join("");
+    return `<div class="grupo-card${isBrasil?" brasil":""}">
+      <div class="grupo-header ${isBrasil?"verde":"azul"}"><span>Grupo ${g}${isBrasil?" 🇧🇷":""}</span></div>
+      ${teams_html}
+    </div>`;
   }).join("");
-  return '<div class="section-title">Grupos da Copa 2026</div><div class="grid-grupos">'+cards+'</div>';
+  return `<div class="section-title">Grupos da Copa 2026</div><div class="grid-grupos">${cards}</div>`;
 }
 
-function buildRanking() {
-  var ranking = getRanking();
-  var items = ranking.length === 0
-    ? '<div style="color:#999;text-align:center;padding:40px">Nenhum participante ainda.</div>'
-    : ranking.map(function(p,i){
-        var medal = i===0?"🥇":i===1?"🥈":i===2?"🥉":(i+1)+"º";
-        var border = i===0?"#FEDD00":i===1?"#C0C0C0":i===2?"#CD7F32":"#eee";
-        return '<div class="ranking-item" style="border-color:'+border+'">'+
-          '<div style="font-size:24px;min-width:36px;text-align:center">'+medal+'</div>'+
-          '<div style="flex:1;font-weight:600;font-size:15px">'+esc(p.name)+'</div>'+
-          '<div class="pts-badge">'+p.score+' pts</div>'+
-        '</div>';
+function buildRanking(){
+  const ranking = getRanking();
+  const items = ranking.length === 0
+    ? `<div style="color:#999;text-align:center;padding:40px">Nenhum participante ainda.</div>`
+    : ranking.map((p,i) => {
+        const medal = i===0?"🥇":i===1?"🥈":i===2?"🥉":(i+1)+"º";
+        const border = i===0?"#FEDD00":i===1?"#C0C0C0":i===2?"#CD7F32":"#eee";
+        return `<div class="ranking-item" style="border-color:${border}">
+          <div style="font-size:24px;min-width:36px;text-align:center">${medal}</div>
+          <div style="flex:1;font-weight:600;font-size:15px">${esc(p.name)}</div>
+          <div class="pts-badge">${p.score} pts</div>
+        </div>`;
       }).join("");
-  return '<div class="section-title">🏅 Ranking</div>'+items;
+  return `<div class="section-title">🏅 Ranking</div>${items}`;
 }
 
-function buildAdmin() {
-  if (!state.adminUnlocked) {
-    return '<div class="admin-box">'+
-      '<div style="font-size:14px;color:#666;margin-bottom:12px">Senha de administrador:</div>'+
-      '<input id="admin-pwd" type="password" placeholder="Senha..." style="margin-bottom:12px"/>'+
-      '<button class="btn-green" id="btn-admin-login" style="width:100%;padding:10px">Entrar</button>'+
-      '<div style="font-size:11px;color:#aaa;margin-top:8px;text-align:center">Senha padrão: copa2026</div>'+
-    '</div>';
+function buildAdmin(){
+  if (!state.adminUnlocked){
+    return `<div class="admin-box">
+      <div style="font-size:14px;color:#666;margin-bottom:12px">Senha de administrador:</div>
+      <input id="admin-pwd" type="password" placeholder="Senha..." style="margin-bottom:12px"/>
+      <button class="btn-green" id="btn-admin-login" style="width:100%;padding:10px">Entrar</button>
+      <div style="font-size:11px;color:#aaa;margin-top:8px;text-align:center">Senha padrão: copa2026</div>
+    </div>`;
   }
 
-  var tabsHTML = '<div class="tabs">'+
-    '<button class="tab-btn'+(state.tab==="grupos"?" active":"")+'" data-tab="grupos">Fase de Grupos</button>'+
-    '<button class="tab-btn'+(state.tab==="fases"?" active":"")+'" data-tab="fases">Fase Final</button>'+
-  '</div>';
+  const tabsHTML = `<div class="tabs">
+    <button class="tab-btn${state.tab==="grupos"?" active":""}" data-tab="grupos">Fase de Grupos</button>
+    <button class="tab-btn${state.tab==="fases"?" active":""}" data-tab="fases">Fase Final</button>
+    <button class="tab-btn${state.tab==="participantes"?" active":""}" data-tab="participantes">Participantes</button>
+  </div>`;
 
-  var content = "";
-  if (state.tab === "grupos") {
-    var cards = Object.entries(GRUPOS).map(function(entry) {
-      var g = entry[0], teams = entry[1];
-      var r = (state.data.results.groups && state.data.results.groups[g]) ? state.data.results.groups[g] : {};
-      var opts = teams.map(function(t){return '<option value="'+esc(t)+'"'+(r.first===t?" selected":"")+'>'+esc(t)+'</option>';}).join("");
-      var opts2= teams.map(function(t){return '<option value="'+esc(t)+'"'+(r.second===t?" selected":"")+'>'+esc(t)+'</option>';}).join("");
-      return '<div class="palpite-card">'+
-        '<div class="palpite-header"><span>Grupo '+g+'</span></div>'+
-        '<div class="palpite-body">'+
-          '<div class="palpite-label">1º lugar</div>'+
-          '<select data-result-group="'+g+'" data-pos="first" style="margin-bottom:8px"><option value="">-- selecione --</option>'+opts+'</select>'+
-          '<div class="palpite-label">2º lugar</div>'+
-          '<select data-result-group="'+g+'" data-pos="second"><option value="">-- selecione --</option>'+opts2+'</select>'+
-        '</div>'+
-      '</div>';
+  let content = "";
+  if (state.tab === "grupos"){
+    const cards = Object.entries(GRUPOS).map(([g, teams]) => {
+      const r = state.data.results.groups?.[g] || {};
+      const opts1 = teams.map(t => `<option value="${esc(t)}"${r.first===t?" selected":""}>${esc(t)}</option>`).join("");
+      const opts2 = teams.map(t => `<option value="${esc(t)}"${r.second===t?" selected":""}>${esc(t)}</option>`).join("");
+      return `<div class="palpite-card">
+        <div class="palpite-header"><span>Grupo ${g}</span></div>
+        <div class="palpite-body">
+          <div class="palpite-label">1º lugar</div>
+          <select data-result-group="${g}" data-pos="first" style="margin-bottom:8px"><option value="">-- selecione --</option>${opts1}</select>
+          <div class="palpite-label">2º lugar</div>
+          <select data-result-group="${g}" data-pos="second"><option value="">-- selecione --</option>${opts2}</select>
+        </div>
+      </div>`;
     }).join("");
-    content = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">'+cards+'</div>';
-  } else {
-    content = ROUNDS.map(function(round) {
-      var rr = (state.data.results.rounds && state.data.results.rounds[round.key]) ? state.data.results.rounds[round.key] : [];
-      var selects = Array.from({length:round.slots}).map(function(_,i){
-        var opts = ALL_TEAMS.map(function(t){return '<option value="'+esc(t)+'"'+(rr[i]===t?" selected":"")+'>'+esc(t)+'</option>';}).join("");
-        return '<select data-result-round="'+round.key+'" data-idx="'+i+'"><option value="">-- time --</option>'+opts+'</select>';
+    content = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">${cards}</div>`;
+  } else if (state.tab === "fases"){
+    content = ROUNDS.map(round => {
+      const rr = state.data.results.rounds?.[round.key] || [];
+      const selects = Array.from({length:round.slots}).map((_,i) => {
+        const opts = ALL_TEAMS.map(t => `<option value="${esc(t)}"${rr[i]===t?" selected":""}>${esc(t)}</option>`).join("");
+        return `<select data-result-round="${round.key}" data-idx="${i}"><option value="">-- time --</option>${opts}</select>`;
       }).join("");
-      return '<div class="fase-card">'+
-        '<div class="fase-header"><span>'+round.label+'</span><small>'+round.pts+' pts · '+round.slots+' time'+(round.slots>1?"s":"")+'</small></div>'+
-        '<div class="fase-body">'+selects+'</div>'+
-      '</div>';
+      return `<div class="fase-card">
+        <div class="fase-header"><span>${round.label}</span><small>${round.pts} pts · ${round.slots} time${round.slots>1?"s":""}</small></div>
+        <div class="fase-body">${selects}</div>
+      </div>`;
     }).join("");
+  } else {
+    const list = state.data.participants
+      .slice()
+      .sort((a,b)=> a.name.localeCompare(b.name));
+    content = list.length === 0
+      ? `<div style="color:#999;text-align:center;padding:40px">Nenhum participante ainda.</div>`
+      : list.map(p => `<div class="ranking-item">
+          <div style="flex:1;font-weight:600">${esc(p.name)}</div>
+          <button class="btn-outline" data-remove="${esc(p.id)}" style="color:#dc2626;border-color:#dc2626">Remover</button>
+        </div>`).join("");
   }
-  return '<div style="font-weight:700;font-size:18px;color:#006233;margin-bottom:16px">Painel Admin — Resultados Reais</div>'+tabsHTML+content;
+  return `<div style="font-weight:700;font-size:18px;color:#006233;margin-bottom:16px">Painel Admin — Resultados Reais</div>${tabsHTML}${content}`;
 }
 
-function buildPalpitar() {
-  var p = getParticipant();
-  if (!p) return '<div style="padding:40px;text-align:center;color:#999">Participante não encontrado.</div>';
+function buildPalpitar(){
+  const p = getParticipant();
+  if (!p) return `<div style="padding:40px;text-align:center;color:#999">Participante não encontrado.</div>`;
 
-  var score = calcScore(p.palpites, state.data.results);
-  var userBar = '<div class="user-bar">'+
-    '<button class="btn-outline" id="btn-voltar">← Voltar</button>'+
-    '<div class="pts-badge">'+esc(p.name)+' — '+score+' pts</div>'+
-  '</div>';
+  const score = calcScore(p.palpites, state.data.results);
+  const userBar = `<div class="user-bar">
+    <button class="btn-outline" id="btn-voltar">← Voltar</button>
+    <div class="pts-badge">${esc(p.name)} — ${score} pts</div>
+  </div>`;
 
-  var tabsHTML = '<div class="tabs">'+
-    '<button class="tab-btn'+(state.tab==="grupos"?" active":"")+'" data-tab="grupos">Fase de Grupos</button>'+
-    '<button class="tab-btn'+(state.tab==="fases"?" active":"")+'" data-tab="fases">Fase Final</button>'+
-  '</div>';
+  const tabsHTML = `<div class="tabs">
+    <button class="tab-btn${state.tab==="grupos"?" active":""}" data-tab="grupos">Fase de Grupos</button>
+    <button class="tab-btn${state.tab==="fases"?" active":""}" data-tab="fases">Fase Final</button>
+  </div>`;
 
-  var content = "";
-  if (state.tab === "grupos") {
-    var pg = (p.palpites && p.palpites.groups) ? p.palpites.groups : {};
-    var cards = Object.entries(GRUPOS).map(function(entry) {
-      var g = entry[0], teams = entry[1];
-      var pal = pg[g] || {};
-      var rg  = (state.data.results.groups && state.data.results.groups[g]) ? state.data.results.groups[g] : {};
-      var a1  = !!(rg.first  && pal.first  === rg.first);
-      var a2  = !!(rg.second && pal.second === rg.second);
-      var badge = (a1||a2) ? '<span style="font-size:11px;color:#FEDD00">'+(a1&&a2?"✓✓ +4":"✓ +1")+'</span>' : "";
-      var opts1 = teams.map(function(t){return '<option value="'+esc(t)+'"'+(pal.first===t?" selected":"")+'>'+esc(t)+'</option>';}).join("");
-      var opts2 = teams.map(function(t){return '<option value="'+esc(t)+'"'+(pal.second===t?" selected":"")+'>'+esc(t)+'</option>';}).join("");
-      return '<div class="palpite-card">'+
-        '<div class="palpite-header"><span>Grupo '+g+'</span>'+badge+'</div>'+
-        '<div class="palpite-body">'+
-          '<div class="palpite-label">1º lugar '+(a1?"✅":"")+'</div>'+
-          '<select data-pal-group="'+g+'" data-pos="first" style="margin-bottom:8px"><option value="">-- palpite --</option>'+opts1+'</select>'+
-          '<div class="palpite-label">2º lugar '+(a2?"✅":"")+'</div>'+
-          '<select data-pal-group="'+g+'" data-pos="second"><option value="">-- palpite --</option>'+opts2+'</select>'+
-        '</div>'+
-      '</div>';
+  let content = "";
+  if (state.tab === "grupos"){
+    const pg = p.palpites?.groups || {};
+    const cards = Object.entries(GRUPOS).map(([g, teams]) => {
+      const pal = pg[g] || {};
+      const rg  = state.data.results.groups?.[g] || {};
+      const a1  = !!(rg.first  && pal.first  === rg.first);
+      const a2  = !!(rg.second && pal.second === rg.second);
+      const badge = (a1||a2) ? `<span style="font-size:11px;color:#FEDD00">${a1&&a2?"✓✓ +4":"✓ +1"}</span>` : "";
+      const opts1 = teams.map(t => `<option value="${esc(t)}"${pal.first===t?" selected":""}>${esc(t)}</option>`).join("");
+      const opts2 = teams.map(t => `<option value="${esc(t)}"${pal.second===t?" selected":""}>${esc(t)}</option>`).join("");
+      return `<div class="palpite-card">
+        <div class="palpite-header"><span>Grupo ${g}</span>${badge}</div>
+        <div class="palpite-body">
+          <div class="palpite-label">1º lugar ${a1?"✅":""}</div>
+          <select data-pal-group="${g}" data-pos="first" style="margin-bottom:8px"><option value="">-- palpite --</option>${opts1}</select>
+          <div class="palpite-label">2º lugar ${a2?"✅":""}</div>
+          <select data-pal-group="${g}" data-pos="second"><option value="">-- palpite --</option>${opts2}</select>
+        </div>
+      </div>`;
     }).join("");
-    content = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(195px,1fr));gap:12px">'+cards+'</div>';
+    content = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(195px,1fr));gap:12px">${cards}</div>`;
   } else {
-    var pr2 = (p.palpites && p.palpites.rounds) ? p.palpites.rounds : {};
-    content = ROUNDS.map(function(round) {
-      var pp  = pr2[round.key] || [];
-      var rr2 = (state.data.results.rounds && state.data.results.rounds[round.key]) ? state.data.results.rounds[round.key] : [];
-      var selects = Array.from({length:round.slots}).map(function(_,i){
-        var acerto = !!(pp[i] && rr2.indexOf(pp[i]) !== -1);
-        var opts = ALL_TEAMS.map(function(t){return '<option value="'+esc(t)+'"'+(pp[i]===t?" selected":"")+'>'+esc(t)+'</option>';}).join("");
-        return '<div style="display:flex;flex-direction:column;gap:4px">'+
-          '<select data-pal-round="'+round.key+'" data-idx="'+i+'" '+(acerto?'class="acerto-border"':'')+'>'+
-            '<option value="">-- time --</option>'+opts+
-          '</select>'+
-          (acerto?'<span class="acerto">✅ +'+round.pts+'</span>':'')+
-        '</div>';
+    const pr2 = p.palpites?.rounds || {};
+    content = ROUNDS.map(round => {
+      const pp  = pr2[round.key] || [];
+      const rr2 = state.data.results.rounds?.[round.key] || [];
+      const selects = Array.from({length:round.slots}).map((_,i) => {
+        const acerto = !!(pp[i] && rr2.indexOf(pp[i]) !== -1);
+        const opts = ALL_TEAMS.map(t => `<option value="${esc(t)}"${pp[i]===t?" selected":""}>${esc(t)}</option>`).join("");
+        return `<div style="display:flex;flex-direction:column;gap:4px">
+          <select data-pal-round="${round.key}" data-idx="${i}" ${acerto?'class="acerto-border"':''}>
+            <option value="">-- time --</option>${opts}
+          </select>
+          ${acerto?`<span class="acerto">✅ +${round.pts}</span>`:""}
+        </div>`;
       }).join("");
-      return '<div class="fase-card">'+
-        '<div class="fase-header"><span>'+round.label+'</span><small>'+round.pts+' pts por acerto</small></div>'+
-        '<div class="fase-body">'+selects+'</div>'+
-      '</div>';
+      return `<div class="fase-card">
+        <div class="fase-header"><span>${round.label}</span><small>${round.pts} pts por acerto</small></div>
+        <div class="fase-body">${selects}</div>
+      </div>`;
     }).join("");
   }
   return userBar + tabsHTML + content;
 }
 
-function esc(str) {
-  return String(str).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
-}
-
-/* ── EVENTS ── */
-function attachEvents() {
-  // Nav
-  document.querySelectorAll("[data-nav]").forEach(function(btn) {
-    btn.addEventListener("click", function() {
+function attachEvents(){
+  document.querySelectorAll("[data-nav]").forEach(btn => {
+    btn.addEventListener("click", function(){
       state.view = this.getAttribute("data-nav");
       state.tab = "grupos";
       render();
     });
   });
 
-  // Home: selecionar participante
-  document.querySelectorAll("[data-select]").forEach(function(btn) {
-    btn.addEventListener("click", function() {
-      state.activeParticipant = parseInt(this.getAttribute("data-select"));
+  document.querySelectorAll("[data-select]").forEach(btn => {
+    btn.addEventListener("click", function(){
+      state.activeParticipant = this.getAttribute("data-select");
+      saveLocalPrefs();
       state.view = "palpitar";
       state.tab = "grupos";
       render();
     });
   });
 
-  // Home: adicionar participante
-  var btnAdd = document.getElementById("btn-add");
+  const btnAdd = document.getElementById("btn-add");
   if (btnAdd) btnAdd.addEventListener("click", addParticipant);
-  var inp = document.getElementById("inp-name");
-  if (inp) inp.addEventListener("keydown", function(e){ if(e.key==="Enter") addParticipant(); });
+  const inp = document.getElementById("inp-name");
+  if (inp) inp.addEventListener("keydown", e => { if (e.key === "Enter") addParticipant(); });
 
-  // Voltar
-  var btnVoltar = document.getElementById("btn-voltar");
-  if (btnVoltar) btnVoltar.addEventListener("click", function(){ state.view="home"; render(); });
+  const btnVoltar = document.getElementById("btn-voltar");
+  if (btnVoltar) btnVoltar.addEventListener("click", () => { state.view = "home"; render(); });
 
-  // Tabs
-  document.querySelectorAll("[data-tab]").forEach(function(btn) {
+  document.querySelectorAll("[data-tab]").forEach(btn => {
     btn.addEventListener("click", function(){ state.tab = this.getAttribute("data-tab"); render(); });
   });
 
-  // Admin login
-  var btnLogin = document.getElementById("btn-admin-login");
-  if (btnLogin) btnLogin.addEventListener("click", function(){
-    var pwd = document.getElementById("admin-pwd").value;
-    if (pwd === ADMIN_PWD) { state.adminUnlocked = true; render(); }
+  const btnLogin = document.getElementById("btn-admin-login");
+  if (btnLogin) btnLogin.addEventListener("click", () => {
+    const pwd = document.getElementById("admin-pwd").value;
+    if (pwd === ADMIN_PWD){ state.adminUnlocked = true; saveLocalPrefs(); render(); }
     else alert("Senha incorreta");
   });
 
-  // Admin: resultado grupo
-  document.querySelectorAll("[data-result-group]").forEach(function(sel) {
+  document.querySelectorAll("[data-result-group]").forEach(sel => {
     sel.addEventListener("change", function(){
-      var g = this.getAttribute("data-result-group");
-      var pos = this.getAttribute("data-pos");
+      const g = this.getAttribute("data-result-group");
+      const pos = this.getAttribute("data-pos");
       if (!state.data.results.groups[g]) state.data.results.groups[g] = {};
       state.data.results.groups[g][pos] = this.value;
-      saveData(); render();
+      saveResults();
     });
   });
 
-  // Admin: resultado fase
-  document.querySelectorAll("[data-result-round]").forEach(function(sel) {
+  document.querySelectorAll("[data-result-round]").forEach(sel => {
     sel.addEventListener("change", function(){
-      var key = this.getAttribute("data-result-round");
-      var idx = parseInt(this.getAttribute("data-idx"));
+      const key = this.getAttribute("data-result-round");
+      const idx = parseInt(this.getAttribute("data-idx"));
       if (!state.data.results.rounds[key]) state.data.results.rounds[key] = [];
       state.data.results.rounds[key][idx] = this.value;
-      state.data.results.rounds[key] = state.data.results.rounds[key].filter(function(x){return !!x;});
-      saveData(); render();
+      state.data.results.rounds[key] = state.data.results.rounds[key].filter(x => !!x);
+      saveResults();
     });
   });
 
-  // Palpite grupo
-  document.querySelectorAll("[data-pal-group]").forEach(function(sel) {
+  document.querySelectorAll("[data-pal-group]").forEach(sel => {
     sel.addEventListener("change", function(){
-      var g = this.getAttribute("data-pal-group");
-      var pos = this.getAttribute("data-pos");
-      var p = getParticipant();
+      const g = this.getAttribute("data-pal-group");
+      const pos = this.getAttribute("data-pos");
+      const p = getParticipant();
       if (!p) return;
+      if (!p.palpites) p.palpites = { groups:{}, rounds:{} };
       if (!p.palpites.groups[g]) p.palpites.groups[g] = {};
       p.palpites.groups[g][pos] = this.value;
-      saveData(); render();
+      saveParticipant(p);
     });
   });
 
-  // Palpite fase
-  document.querySelectorAll("[data-pal-round]").forEach(function(sel) {
+  document.querySelectorAll("[data-pal-round]").forEach(sel => {
     sel.addEventListener("change", function(){
-      var key = this.getAttribute("data-pal-round");
-      var idx = parseInt(this.getAttribute("data-idx"));
-      var p = getParticipant();
+      const key = this.getAttribute("data-pal-round");
+      const idx = parseInt(this.getAttribute("data-idx"));
+      const p = getParticipant();
       if (!p) return;
+      if (!p.palpites) p.palpites = { groups:{}, rounds:{} };
       if (!p.palpites.rounds[key]) p.palpites.rounds[key] = [];
       p.palpites.rounds[key][idx] = this.value;
-      p.palpites.rounds[key] = p.palpites.rounds[key].filter(function(x){return !!x;});
-      saveData(); render();
+      p.palpites.rounds[key] = p.palpites.rounds[key].filter(x => !!x);
+      saveParticipant(p);
+    });
+  });
+
+  document.querySelectorAll("[data-remove]").forEach(btn => {
+    btn.addEventListener("click", function(){
+      const id = this.getAttribute("data-remove");
+      const part = state.data.participants.find(p => p.id === id);
+      if (!part) return;
+      if (confirm(`Remover ${part.name}? Esta ação não pode ser desfeita.`)) removeParticipant(id);
     });
   });
 }
 
-function addParticipant() {
-  var inp = document.getElementById("inp-name");
+async function addParticipant(){
+  const inp = document.getElementById("inp-name");
   if (!inp || !inp.value.trim()) return;
-  var p = { id: Date.now(), name: inp.value.trim(), palpites: { groups:{}, rounds:{} } };
-  state.data.participants.push(p);
-  saveData();
+  const name = inp.value.trim();
+  const existing = state.data.participants.find(p => p.name.toLowerCase() === name.toLowerCase());
+  if (existing){
+    state.activeParticipant = existing.id;
+    saveLocalPrefs();
+    state.view = "palpitar";
+    state.tab = "grupos";
+    render();
+    return;
+  }
+  const p = { id: String(Date.now()), name, palpites: { groups:{}, rounds:{} } };
+  await saveParticipant(p);
   state.activeParticipant = p.id;
+  saveLocalPrefs();
   state.view = "palpitar";
   state.tab = "grupos";
   render();
