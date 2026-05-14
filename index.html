@@ -307,7 +307,7 @@ function render(){
 }
 
 function buildHeader(){
-  const views = [["home","Início"],["grupos","Grupos"],["ranking","Ranking"],["admin","Admin"]];
+  const views = [["home","Início"],["grupos","Grupos"],["ranking","Ranking"],["acertos","Acertos"],["admin","Admin"]];
   const nav = views.map(v =>
     `<button class="${state.view===v[0]?"active":""}" data-nav="${v[0]}">${v[1]}</button>`
   ).join("");
@@ -324,6 +324,7 @@ function buildPage(){
   if (state.view === "home")     body = buildHome();
   if (state.view === "grupos")   body = buildGrupos();
   if (state.view === "ranking")  body = buildRanking();
+  if (state.view === "acertos")  body = buildAcertos();
   if (state.view === "admin")    body = buildAdmin();
   if (state.view === "palpitar") body = buildPalpitar();
   return header + `<div class="container">${body}</div>`;
@@ -411,6 +412,66 @@ function buildRanking(){
         </div>`;
       }).join("");
   return `<div class="section-title">🏅 Ranking</div>${items}`;
+}
+
+function buildAcertos(){
+  const ranking = getRanking();
+  if (ranking.length === 0){
+    return `<div class="section-title">📊 Acertos detalhados</div>
+            <div style="color:#999;text-align:center;padding:40px">Nenhum participante ainda.</div>`;
+  }
+
+  const cards = ranking.map(rk => {
+    const p = state.data.participants.find(x => x.id === rk.id);
+    if (!p) return "";
+
+    const pg = p.palpites?.groups || {};
+    const rg = state.data.results.groups || {};
+    let groupsTotal = 0;
+    const groupBadges = Object.keys(GRUPOS).map(g => {
+      const sr = scoreGroup(pg[g], rg[g]);
+      groupsTotal += sr.points;
+      if (sr.points === 0) return "";
+      const sym = sr.kind === "exact" ? "✓✓" : sr.kind === "inverted" ? "⇄" : "✓";
+      return `<span style="display:inline-block;background:#006233;color:#FEDD00;padding:3px 8px;border-radius:6px;margin:2px;font-size:11px;font-weight:600">${g} ${sym} +${sr.points}</span>`;
+    }).join("");
+
+    const roundsRows = ROUNDS.map(round => {
+      const pp = p.palpites?.rounds?.[round.key] || [];
+      const rr = state.data.results.rounds?.[round.key] || [];
+      const hits = pp.filter(t => rr.includes(t));
+      const pts = hits.length * round.pts;
+      const teamsLine = hits.length > 0
+        ? `<div style="font-size:11px;color:#16a34a;margin-top:2px">✅ ${hits.map(esc).join(", ")}</div>`
+        : "";
+      return `<div style="padding:6px 0;border-bottom:1px solid #f0f0f0">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+          <span style="color:#555;flex:1;font-size:12px">${esc(round.label)}</span>
+          <span style="color:#888;font-size:11px">${hits.length}/${round.slots}</span>
+          <span style="color:#006233;font-weight:700;min-width:55px;text-align:right;font-size:13px">${pts} pts</span>
+        </div>
+        ${teamsLine}
+      </div>`;
+    }).join("");
+
+    const groupsSection = groupBadges
+      ? `<div style="margin:10px 0">
+          <div style="font-size:12px;color:#666;margin-bottom:4px">Grupos (${groupsTotal} pts)</div>
+          <div>${groupBadges}</div>
+        </div>`
+      : `<div style="margin:10px 0;font-size:12px;color:#999">Grupos: nenhum acerto ainda</div>`;
+
+    return `<div class="card" style="padding:14px;margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap">
+        <div style="font-weight:700;font-size:16px">${esc(p.name)}</div>
+        <div class="pts-badge">${rk.score} pts</div>
+      </div>
+      ${groupsSection}
+      <div style="margin-top:8px">${roundsRows}</div>
+    </div>`;
+  }).join("");
+
+  return `<div class="section-title">📊 Acertos detalhados</div>${cards}`;
 }
 
 function buildAdmin(){
