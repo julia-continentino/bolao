@@ -175,11 +175,16 @@ function fmtDate(deadline){
   return d.toLocaleDateString("pt-BR", {day:"2-digit", month:"2-digit"});
 }
 
+const PREV_ROUND = { r8: "r16", r4: "r8", r2: "r4", r1: "r2" };
+
 function availableForRound(roundKey, currentPick){
   let teams;
-  if (roundKey === "r4"){
-    const qf = state.data.results.rounds?.["r8"] || [];
-    teams = qf.length === 0 ? ALL_TEAMS : qf.slice().sort((a,b)=>a.localeCompare(b));
+  const prev = PREV_ROUND[roundKey];
+  if (prev){
+    const prevResults = state.data.results.rounds?.[prev] || [];
+    teams = prevResults.length === 0
+      ? ALL_TEAMS
+      : prevResults.slice().sort((a,b)=>a.localeCompare(b));
   } else {
     teams = ALL_TEAMS;
   }
