@@ -140,6 +140,7 @@ const state = {
   tab: "grupos",
   activeParticipant: localPrefs.activeParticipant || null,
   adminUnlocked: !!localPrefs.adminUnlocked,
+  adminEditingId: null,
   loaded: { participants:false, results:false },
   data: { participants:[], results:{ groups:{}, rounds:{} } }
 };
@@ -292,6 +293,9 @@ function calcScore(palpites, results){
 }
 
 function getParticipant(){
+  if (state.adminEditingId){
+    return state.data.participants.find(p => p.id === state.adminEditingId) || null;
+  }
   if (!state.activeParticipant) return null;
   return state.data.participants.find(p => p.id === state.activeParticipant) || null;
 }
@@ -530,8 +534,9 @@ function buildAdmin(){
       .sort((a,b)=> a.name.localeCompare(b.name));
     content = list.length === 0
       ? `<div style="color:#999;text-align:center;padding:40px">Nenhum participante ainda.</div>`
-      : list.map(p => `<div class="ranking-item">
-          <div style="flex:1;font-weight:600">${esc(p.name)}</div>
+      : list.map(p => `<div class="ranking-item" style="gap:8px;flex-wrap:wrap">
+          <div style="flex:1;min-width:140px;font-weight:600">${esc(p.name)}${p.pin?' 🔒':''}</div>
+          <button class="btn-blue" data-admin-edit="${esc(p.id)}">Ver/Editar palpites</button>
           <button class="btn-outline" data-remove="${esc(p.id)}" style="color:#dc2626;border-color:#dc2626">Remover</button>
         </div>`).join("");
   }
@@ -542,12 +547,23 @@ function buildPalpitar(){
   const p = getParticipant();
   if (!p) return `<div style="padding:40px;text-align:center;color:#999">Participante não encontrado.</div>`;
 
+  const isAdminEdit = !!state.adminEditingId;
   const score = calcScore(p.palpites, state.data.results);
+  const adminBanner = isAdminEdit
+    ? `<div class="deadline-banner" style="background:#fef3c7;color:#92400e;border:1px solid #fde68a">
+         🛠 Modo administrador — editando palpites de <strong>${esc(p.name)}</strong> (prazos ignorados)
+       </div>`
+    : "";
+  const rightBtn = isAdminEdit
+    ? `<button class="btn-outline" id="btn-back-admin" style="margin-left:auto">← Voltar ao Admin</button>`
+    : `<button class="btn-outline" id="btn-change-pin" style="margin-left:auto">🔑 Trocar PIN</button>
+       <button class="btn-outline" id="btn-logout" style="color:#dc2626;border-color:#dc2626">Sair</button>`;
+  const leftBtn = isAdminEdit ? "" : `<button class="btn-outline" id="btn-voltar">← Voltar</button>`;
   const userBar = `<div class="user-bar">
-    <button class="btn-outline" id="btn-voltar">← Voltar</button>
+    ${leftBtn}
     <div class="pts-badge">${esc(p.name)} — ${score} pts</div>
-    <button class="btn-outline" id="btn-logout" style="margin-left:auto;color:#dc2626;border-color:#dc2626">Sair</button>
-  </div>`;
+    ${rightBtn}
+  </div>${adminBanner}`;
 
   const tabsHTML = `<div class="tabs">
     <button class="tab-btn${state.tab==="grupos"?" active":""}" data-tab="grupos">Fase de Grupos</button>
@@ -556,7 +572,7 @@ function buildPalpitar(){
 
   let content = "";
   if (state.tab === "grupos"){
-    const groupsLocked = isLocked(GROUP_DEADLINE);
+    const groupsLocked = !isAdminEdit && isLocked(GROUP_DEADLINE);
     const deadlineBanner = `<div class="deadline-banner ${groupsLocked?'closed':'open'}">
       ${groupsLocked ? '🔒 Palpites de grupos encerrados em' : '⏰ Palpites de grupos até'} ${fmtDate(GROUP_DEADLINE)}
     </div>`;
@@ -589,7 +605,7 @@ function buildPalpitar(){
     content = ROUNDS.map(round => {
       const pp  = pr2[round.key] || [];
       const rr2 = state.data.results.rounds?.[round.key] || [];
-      const locked = isLocked(round.deadline);
+      const locked = !isAdminEdit && isLocked(round.deadline);
       const lockTag = locked
         ? `<span class="locked-tag">🔒 Encerrado ${fmtDate(round.deadline)}</span>`
         : `<span class="deadline-tag">⏰ Até ${fmtDate(round.deadline)}</span>`;
@@ -619,6 +635,7 @@ function attachEvents(){
     btn.addEventListener("click", function(){
       state.view = this.getAttribute("data-nav");
       state.tab = "grupos";
+      state.adminEditingId = null;
       render();
     });
   });
@@ -671,6 +688,44 @@ function attachEvents(){
 
   const btnVoltar = document.getElementById("btn-voltar");
   if (btnVoltar) btnVoltar.addEventListener("click", () => { state.view = "home"; render(); });
+
+  document.querySelectorAll("[data-admin-edit]").forEach(btn => {
+    btn.addEventListener("click", function(){
+      if (!state.adminUnlocked) return;
+      state.adminEditingId = this.getAttribute("data-admin-edit");
+      state.view = "palpitar";
+      state.tab = "grupos";
+      render();
+    });
+  });
+
+  const btnBackAdmin = document.getElementById("btn-back-admin");
+  if (btnBackAdmin) btnBackAdmin.addEventListener("click", () => {
+    state.adminEditingId = null;
+    state.view = "admin";
+    state.tab = "participantes";
+    render();
+  });
+
+  const btnChangePin = document.getElementById("btn-change-pin");
+  if (btnChangePin) btnChangePin.addEventListener("click", async () => {
+    const p = getParticipant();
+    if (!p) return;
+    if (p.pin){
+      const atual = window.prompt("Digite seu PIN atual:");
+      if (atual === null) return;
+      if (atual !== p.pin){ alert("PIN atual incorreto."); return; }
+    }
+    const novo = window.prompt("Novo PIN (4 dígitos numéricos):");
+    if (novo === null) return;
+    if (!/^\d{4}$/.test(novo)){ alert("O PIN deve ter 4 dígitos numéricos."); return; }
+    const conf = window.prompt("Confirme o novo PIN:");
+    if (conf === null) return;
+    if (conf !== novo){ alert("A confirmação não bate."); return; }
+    p.pin = novo;
+    await saveParticipant(p);
+    alert("PIN alterado com sucesso!");
+  });
 
   document.querySelectorAll("[data-tab]").forEach(btn => {
     btn.addEventListener("click", function(){ state.tab = this.getAttribute("data-tab"); render(); });
