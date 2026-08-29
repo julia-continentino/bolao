@@ -1,0 +1,129 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  EMPLOYEE
+}
+
+enum UserStatus {
+  PENDING
+  ACTIVE
+  INACTIVE
+}
+
+enum TaskStatus {
+  TODO
+  DONE
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum NotificationType {
+  TASK_ASSIGNED
+  TASK_DUE_TODAY
+  TASK_DUE_TOMORROW
+  TASK_OVERDUE
+  TASK_COMPLETED
+  TASK_UPDATED
+}
+
+model User {
+  id           String     @id @default(cuid())
+  name         String
+  email        String     @unique
+  passwordHash String?
+  role         Role       @default(EMPLOYEE)
+  jobTitle     String?
+  status       UserStatus @default(PENDING)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  tasksRequested   Task[]          @relation("Requester")
+  tasksAssigned    Task[]          @relation("Assignee")
+  notifications    Notification[]
+  historyEntries   TaskHistory[]
+  inviteTokens     InviteToken[]
+
+  @@index([role])
+  @@index([status])
+}
+
+model InviteToken {
+  id        String    @id @default(cuid())
+  token     String    @unique
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model Task {
+  id             String     @id @default(cuid())
+  title          String
+  description    String?
+  requesterId    String
+  requester      User       @relation("Requester", fields: [requesterId], references: [id])
+  assigneeId     String
+  assignee       User       @relation("Assignee", fields: [assigneeId], references: [id])
+  priority       Priority   @default(MEDIUM)
+  status         TaskStatus @default(TODO)
+  notes          String?
+  attachmentUrl  String?
+  attachmentName String?
+  createdAt      DateTime   @default(now())
+  dueDate        DateTime
+  completedAt    DateTime?
+  updatedAt      DateTime   @updatedAt
+
+  notifications Notification[]
+  history       TaskHistory[]
+
+  @@index([requesterId])
+  @@index([assigneeId])
+  @@index([status])
+  @@index([dueDate])
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  taskId    String?
+  task      Task?            @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  message   String
+  read      Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  @@index([userId, read])
+  @@index([taskId])
+}
+
+model TaskHistory {
+  id        String   @id @default(cuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  action    String
+  oldValue  String?
+  newValue  String?
+  createdAt DateTime @default(now())
+
+  @@index([taskId])
+}
