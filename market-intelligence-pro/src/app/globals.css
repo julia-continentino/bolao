@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-sans: "Inter", "Segoe UI", "Helvetica Neue", Arial, system-ui, sans-serif;
+  --font-serif: "Source Serif Pro", Georgia, "Times New Roman", serif;
+}
+
+html, body { background: #f5f7fb; color: #111827; }
+body { font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
+
+@layer components {
+  .card { @apply rounded-lg border border-ink-200 bg-white shadow-card; }
+  .card-header { @apply flex items-center justify-between gap-3 border-b border-ink-200 px-5 py-3.5; }
+  .card-title { @apply text-[13px] font-semibold uppercase tracking-wide text-navy-800; }
+  .btn { @apply inline-flex items-center justify-center gap-2 rounded-md px-3.5 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50; }
+  .btn-primary { @apply btn bg-navy-800 text-white hover:bg-navy-700; }
+  .btn-secondary { @apply btn border border-ink-300 bg-white text-ink-900 hover:bg-ink-100; }
+  .btn-ghost { @apply btn text-ink-700 hover:bg-ink-100; }
+  .btn-danger { @apply btn border border-red-200 bg-white text-red-700 hover:bg-red-50; }
+  .btn-sm { @apply px-2.5 py-1.5 text-xs; }
+  .input { @apply w-full rounded-md border border-ink-300 bg-white px-3 py-2 text-sm text-ink-900 placeholder:text-ink-500 focus:border-navy-500 focus:outline-none focus:ring-2 focus:ring-navy-100; }
+  .label { @apply mb-1.5 block text-xs font-semibold uppercase tracking-wide text-ink-700; }
+  .hint { @apply mt-1 text-xs text-ink-500; }
+  .badge { @apply inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-semibold; }
+  .tab { @apply -mb-px border-b-2 border-transparent px-1 pb-3 text-sm font-medium text-ink-500 hover:text-navy-800; }
+  .tab-active { @apply border-navy-800 text-navy-900; }
+  .prose-report p { @apply mb-3 text-[15px] leading-7 text-ink-900; }
+  .num { font-variant-numeric: tabular-nums; }
+}

@@ -1,0 +1,91 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  name         String
+  passwordHash String
+  createdAt    DateTime   @default(now())
+  projects     Project[]
+  templates    Template[]
+}
+
+model Project {
+  id            String            @id @default(cuid())
+  userId        String
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title         String
+  /// Parâmetros da pesquisa (setor, região, período, objetivo, questões)
+  params        Json
+  status        String            @default("draft") // draft | running | completed | failed
+  currentVersionId String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  versions      ResearchVersion[]
+  reports       Report[]
+
+  @@index([userId, updatedAt])
+}
+
+model ResearchVersion {
+  id         String   @id @default(cuid())
+  projectId  String
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  number     Int
+  /// Parâmetros utilizados nesta versão (snapshot)
+  params     Json
+  status     String   @default("queued") // queued | running | completed | failed
+  /// Progresso dos agentes
+  progress   Json     @default("[]")
+  /// Conteúdo estruturado da pesquisa (seções, datasets, fontes, verificação, revisão)
+  content    Json?
+  error      String?
+  model      String?
+  note       String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  completedAt DateTime?
+
+  @@unique([projectId, number])
+}
+
+model Report {
+  id         String           @id @default(cuid())
+  projectId  String
+  project    Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  versionId  String
+  title      String
+  config     Json
+  content    Json?
+  status     String           @default("draft") // draft | generating | ready | failed
+  error      String?
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+  revisions  ReportRevision[]
+}
+
+model ReportRevision {
+  id        String   @id @default(cuid())
+  reportId  String
+  report    Report   @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  config    Json
+  content   Json
+  createdAt DateTime @default(now())
+}
+
+model Template {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  description String?
+  config    Json
+  createdAt DateTime @default(now())
+}
