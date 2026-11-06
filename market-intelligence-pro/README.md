@@ -80,6 +80,16 @@ O servidor precisa de acesso de saída a:
 - `www.imf.org`
 - `data.sec.gov` e `www.sec.gov`
 
+## Publicar no Railway
+
+O arquivo `railway.json` já define os comandos de build, de início (que cria as tabelas no banco) e o health check em `/api/status`.
+
+1. Em railway.com, entre com o GitHub: **New Project → Deploy from GitHub repo → `bolao`**.
+2. No serviço criado, em **Settings**, defina **Root Directory** = `market-intelligence-pro`. Se o Railway não aplicar os comandos do `railway.json`, informe em **Config-as-code** o caminho `/market-intelligence-pro/railway.json`.
+3. No projeto: **New → Database → PostgreSQL**.
+4. Em **Variables** do serviço do app: `DATABASE_URL` = `${{Postgres.DATABASE_URL}}`, `AUTH_SECRET`, `ANTHROPIC_API_KEY` e, opcionalmente, `AI_MODEL`, `AI_EFFORT` e `SEC_USER_AGENT`.
+5. **Settings → Networking → Generate Domain** e acesse o endereço gerado.
+
 ## Observações de implantação
 
 - As pesquisas, que levam de 5 a 15 minutos, rodam em segundo plano no processo Node.js (`next start`). Em hospedagem serverless, mova `runResearch`/`generateReport` para um worker ou fila, como Inngest, BullMQ ou Supabase Queues.
